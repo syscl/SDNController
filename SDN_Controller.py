@@ -37,6 +37,11 @@ import time
 import datetime
 from time import gmtime, strftime
 from pox.lib.addresses import IPAddr, IPAddr6, EthAddr
+#
+# For interrupt to debug (sys.exit())
+#
+import sys
+kDEBUG = False
 
 #
 # MAC Header (Ethernet II):  
@@ -62,6 +67,17 @@ def msglog(status, message):
   if status == "--->":
     color = '\033[1;34m'
     print "[{0}][{1}{2}{3}] {4}".format(datetime.datetime.now().time(), color, status, OFF, message)
+
+
+#
+# Generate an interrupt to check the flow (ease for debugging)
+#
+def interruptNow():
+  if kDEBUG:
+    msglog("OK", "Interrupt generated at {0}".format(inspect.stack()[1].filename))
+    sys.exit()
+  else:
+    return
 
 # Hosts hash table (Key, Value) = (HostIP, MAC)
 hosts = {}
@@ -111,27 +127,20 @@ class LearningSwitch (object):
       self.hold_down_expired = True
     else:
       self.hold_down_expired = False
-    
-    def enableTraffic(type, idle_timeout, hard_timeout, port):
-      if type == pkt.ethernet.ARP_TYPE:
-        msglog("OK", "Enable ARP traffic")
-        msg.match = of.ofp_match(dl_type = pkt.ethernet.ARP_TYPE)
-      else:
-        return
-      
-      msg.idle_timeout = idle_timeout
-      msg.hard_timeout = hard_timeout
-      msg.actions.append(of.ofp_action_output(port = port))
-      #self.connection.send(msg)
 
     #
     # Add entries for ARP traffic
     #
     msg = of.ofp_flow_mod()
     msg.match = of.ofp_match(dl_type = pkt.ethernet.ARP_TYPE);
+    # check the flow now
+    interruptNow()
     msg.idle_timeout = of.OFP_FLOW_PERMANENT;
+    interruptNow()
     msg.hard_timeout = of.OFP_FLOW_PERMANENT;
+    interruptNow()
     msg.actions.append(of.ofp_action_output(port = of.OFPP_CONTROLLER))
+    interruptNow()
     self.connection.send(msg)
     #
     # Add DHCP traffic incepetion
@@ -141,9 +150,14 @@ class LearningSwitch (object):
     tp_src   = 67
     tp_dst   = 68
     msg.match = of.ofp_match(nw_proto = nw_proto, tp_src = tp_src , tp_dst = tp_dst);
+    # check the flow now
+    interruptNow()
     msg.idle_timeout = of.OFP_FLOW_PERMANENT;
+    interruptNow()
     msg.hard_timeout = of.OFP_FLOW_PERMANENT;
+    interruptNow()
     msg.actions.append(of.ofp_action_output(port = of.OFPP_CONTROLLER))
+    interruptNow()
     msglog("OK", "Enable DHCP traffic inception")
     msglog("OK", "Initialize l2_learning switch: transparent = {0}".format(str(self.transparent)))
     msglog("OK", "Register a handler for DHCP lease packets")
@@ -271,8 +285,11 @@ class LearningSwitch (object):
       """
       ret = False
       src_mac_eth = aPacket.src
+      interruptNow()
       dst_mac_eth = aPacket.dst
+      interruptNow()
       src_ip_arp  = aPacket.payload.protosrc
+      interruptNow()
       src_mac_arp = aPacket.payload.hwsrc 
       dst_ip_arp  = aPacket.payload.protodst
       # log out the information for debug

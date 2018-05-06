@@ -1,5 +1,10 @@
 SDNController Changelog
 ==============
+### v1.5
+
+- Add interruptNow() for ease debugging
+- Clean up
+
 ### v1.4
 
 - Optimize logic
