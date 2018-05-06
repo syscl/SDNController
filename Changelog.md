@@ -1,5 +1,9 @@
 SDNController Changelog
 ==============
+### v1.4
+
+- Optimize logic
+
 ### v1.3
 
 - Cosemic fix

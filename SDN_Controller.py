@@ -13,10 +13,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
+"""
+An efficienct L2 learning switch that can protect against ARP spoof attack in 
+Software Defined network. It check against each of the ARP packets and wash out 
+each of them.
+"""
 from pox.core import core
 import pox.openflow.libopenflow_01 as of
-from pox.lib.util import dpid_to_str
+from pox.lib.util import dpid_to_str, str_to_dpid
 from pox.lib.util import str_to_bool
 import pox.lib.packet as pkt
 # syscl - for poisson distribution
@@ -70,60 +74,32 @@ gFloodDelay = 0
 
 # DHCP message handler
 def _handle_dhcp_lease(event):
-  msglog("OK", "DHCP packet from ({0}, {1})".format(event.ip, event.host_mac))
+  
   # Add this IP and MAC to the hosts dictionary
-  if event.ip != None and event.host_mac != None:
-    hosts[str(event.ip)] = str(event.host_mac)
-  msglog("OK", "Add host ({0}, {1}) to table (IP, MAC)".format(event.ip, event.host_mac))
-
+  if event is not None:
+    msglog("OK", "DHCP packet from ({0}, {1})".format(event.ip, event.host_mac))
+    if event.ip is None or event.host_mac is None:
+      msglog("NOTE", "Either IP or MAC is empty, invalid DHCP message")
+      pass
+    else:
+      # valid DHCP 
+      msglog("OK", "Valid DHCP message")
+      hosts[str(event.ip)] = str(event.host_mac)
+      msglog("OK", "Add host ({0}, {1}) to table (IP, MAC)".format(event.ip, event.host_mac))
+  else:
+    msglog("NOTE", "No DHCP message or DHCP is None")
+    pass
 
 class LearningSwitch (object):
   """
-  The smart switch "brain" associated with a single OpenFlow switch.
-
-  When we see a packet, we'd like to output it on a port which will
-  eventually lead to the destination.  To accomplish this, we build a
-  table that maps addresses to ports.
-
-  We populate the table by observing traffic.  When we see a packet
-  from some source coming from some port, we know that source is out
-  that port.
-
-  When we want to forward traffic, we look up the desintation in our
-  table.  If we don't know the port, we simply send the message out
-  all ports except the one it came in on.  (In the presence of loops,
-  this is bad!).
-
-  In short, our algorithm looks like this:
-
-  For each packet from the switch:
-  1) Use source address and switch port to update address/port table
-  2) Is transparent = False and either Ethertype is LLDP or the packet's
-     destination address is a Bridge Filtered address?
-     Yes:
-        2a) Drop packet -- don't forward link-local traffic (LLDP, 802.1x)
-            DONE
-  3) Is destination multicast?
-     Yes:
-        3a) Flood the packet
-            DONE
-  4) Port for destination address in our address/port table?
-     No:
-        4a) Flood the packet
-            DONE
-  5) Is output port the same as input port?
-     Yes:
-        5a) Drop packet and similar ones for a while
-  6) Install flow table entry in the switch so that this
-     flow goes out the appopriate port
-     6a) Send the packet out appropriate port
+  The l2 learning switch that attaches to OpenFlow.
   """
   def __init__ (self, connection, transparent):
     # Switch we'll be adding smart switch capabilities to
-    self.connection = connection
+    self.connection  = connection
     self.transparent = transparent
 
-    # Our table
+    # (K, V) == (MAC, Port) table
     self.macToPort = {}
 
     # We want to hear PacketIn messages, so we listen
@@ -131,35 +107,53 @@ class LearningSwitch (object):
     connection.addListeners(self)
 
     # We just use this to know when to log a helpful message
-    self.hold_down_expired = gFloodDelay == 0
+    if gFloodDelay == 0:
+      self.hold_down_expired = True
+    else:
+      self.hold_down_expired = False
+    
+    def enableTraffic(type, idle_timeout, hard_timeout, port):
+      if type == pkt.ethernet.ARP_TYPE:
+        msglog("OK", "Enable ARP traffic")
+        msg.match = of.ofp_match(dl_type = pkt.ethernet.ARP_TYPE)
+      else:
+        return
+      
+      msg.idle_timeout = idle_timeout
+      msg.hard_timeout = hard_timeout
+      msg.actions.append(of.ofp_action_output(port = port))
+      #self.connection.send(msg)
 
-    #log.debug("Initializing LearningSwitch, transparent=%s",
-    #          str(self.transparent))
-
-    # Now add entries for ARP traffic
+    #
+    # Add entries for ARP traffic
+    #
     msg = of.ofp_flow_mod()
     msg.match = of.ofp_match(dl_type = pkt.ethernet.ARP_TYPE);
     msg.idle_timeout = of.OFP_FLOW_PERMANENT;
     msg.hard_timeout = of.OFP_FLOW_PERMANENT;
     msg.actions.append(of.ofp_action_output(port = of.OFPP_CONTROLLER))
     self.connection.send(msg)
-  
-    # Add entries to intercept the DHCP traffic
+    #
+    # Add DHCP traffic incepetion
+    #
     msg = of.ofp_flow_mod()
-    msg.match = of.ofp_match(nw_proto = 17, tp_src = 67 , tp_dst = 68);
+    nw_proto = 17
+    tp_src   = 67
+    tp_dst   = 68
+    msg.match = of.ofp_match(nw_proto = nw_proto, tp_src = tp_src , tp_dst = tp_dst);
     msg.idle_timeout = of.OFP_FLOW_PERMANENT;
     msg.hard_timeout = of.OFP_FLOW_PERMANENT;
     msg.actions.append(of.ofp_action_output(port = of.OFPP_CONTROLLER))
-    msglog("OK", "Install flow entry.")
-
-    # Register a handler for DHCP lease packets
+    msglog("OK", "Enable DHCP traffic inception")
+    msglog("OK", "Initialize l2_learning switch: transparent = {0}".format(str(self.transparent)))
+    msglog("OK", "Register a handler for DHCP lease packets")
     core.DHCPD.addListenerByName('DHCPLease', _handle_dhcp_lease)
 
   def _handle_PacketIn (self, event):
     """
-    Handle packet in messages from the switch to implement above algorithm.
+    Handle packet in messages from the switch.
 
-    class PacketIn in pox/openflow/__init__.py 
+    type of class PacketIn in pox/openflow/__init__.py 
     ('Dir: ', ['__class__', 
     '__delattr__', '__dict__', '__doc__',  '__format__', 
     '__getattribute__', '__hash__', '__init__', '__module__', 
@@ -172,42 +166,61 @@ class LearningSwitch (object):
     packet = event.parsed
 
     def flood(message = None):
-      """ Floods the packet """
+      """
+      Flooding out the packet 
+      """
       msg = of.ofp_packet_out()
-      if time.time() - self.connection.connect_time >= gFloodDelay:
-        # Only flood if we've been connected for a little while...
-        if self.hold_down_expired is False:
-          # Oh yes it is!
+      if time.time() - self.connection.connect_time < gFloodDelay:
+        # too fast, we do nothing here
+        pass
+      else:
+        # Only flood if we initilized the controller long enough
+        if self.hold_down_expired is True:
+          pass
+        else:
+          # The hold down has been expired
+          # Set up the flag
           self.hold_down_expired = True
           msglog("NOTE", "Found expired hold-down flood @{0}".format(event.dpid))
           msglog("--->", "Flooding...")
 
-        if message is not None: 
-          log.debug(message)
+        if message is None:
+          pass
+        else:
+          msglog("OK", "The message is {0}".format(message))
         msg.actions.append(of.ofp_action_output(port = of.OFPP_FLOOD))
       msg.data = event.ofp
       msg.in_port = event.port
       self.connection.send(msg)
 
-    def drop (duration = None):
+    def drop(duration = None):
       """
-      Drops this packet and optionally installs a flow to continue
-      dropping similar ones for a while
+      Drop current packet and similiar packets for a while
       """
-      if duration is not None:
-        if not isinstance(duration, tuple):
-          duration = (duration,duration)
-        msg = of.ofp_flow_mod()
-        msg.match = of.ofp_match.from_packet(packet)
-        msg.idle_timeout = duration[0]
-        msg.hard_timeout = duration[1]
-        msg.buffer_id = event.ofp.buffer_id
-        self.connection.send(msg)
-      elif event.ofp.buffer_id is not None:
-        msg = of.ofp_packet_out()
-        msg.buffer_id = event.ofp.buffer_id
-        msg.in_port = event.port
-        self.connection.send(msg)
+      if duration is None or event.ofp.buffer_id is None:
+        # what to drop?
+        return
+      else:
+        # Either is not None
+        if duration is not None:
+          msg = of.ofp_flow_mod()
+          msg.match = of.ofp_match.from_packet(packet)
+          if isinstance(duration, tuple):
+            msg.idle_timeout = duration[0]
+            msg.hard_timeout = duration[1]
+          else:
+            msg.idle_timeout = duration
+            msg.hard_timeout = duration
+          msg.buffer_id = event.ofp.buffer_id
+          self.connection.send(msg) 
+        else:
+          # event.ofp.buffer_id is not empty
+          # timeout is missing
+          msg = of.ofp_packet_out()
+          msg.buffer_id = event.ofp.buffer_id
+          msg.in_port = event.port
+          self.connection.send(msg)
+
 
     def logARPInfo(aPacket):
       """
@@ -245,7 +258,7 @@ class LearningSwitch (object):
           if port == event.port:
             # log out the information first
             logARPInfo(aPacket)
-            msglog("NOTE", "Drop packet {0} -> {1} on {2}@{3}".format(aPacket.src, aPacket.dst, dpid_to_str(event.dpid), port))
+            msglog("NOTE", "Found spoof reply: {0} -> {1} on {2}@{3}".format(aPacket.src, aPacket.dst, dpid_to_str(event.dpid), port))
             # Yating - simply drop a packet will cause performance hit, thus
             # two ideas come into my mind: poisson checking vs blacklist
             blockMAC(aPacket)
@@ -288,20 +301,15 @@ class LearningSwitch (object):
 
     def blockMAC(aPacket):
       """
-      Drop arp packet from current mac
+      Drop arp packet (aPacket) from current MAC
       """
       mac     = aPacket.src
       timeout = 60 # unit: sec
       msglog("--->", "Generating blacklist to drop all packets from {0} for {1}s".format(mac, timeout))
       actions = []
-      actions.append(of.ofp_action_output(port = of.OFPP_NONE)) # block packet
-      msg = of.ofp_flow_mod(command=of.OFPFC_ADD,
-                              idle_timeout=timeout, 
-                              hard_timeout=timeout, 
-                              buffer_id=event.ofp.buffer_id,
-                              actions=actions,
-                              match=of.ofp_match.from_packet(aPacket,
-                                                               event.port))
+      actions.append(of.ofp_action_output(port = of.OFPP_NONE)) # block current MAC
+      msg = of.ofp_flow_mod(command=of.OFPFC_ADD,idle_timeout=timeout,hard_timeout=timeout,buffer_id=event.ofp.buffer_id,
+                              actions=actions,match=of.ofp_match.from_packet(aPacket,event.port))
       event.connection.send(msg.pack())
       msglog("OK", "Generate blacklist for {0}".format(mac))
 
@@ -376,16 +384,20 @@ class l2_learning (object):
   #
   # Waits for OpenFlow switches to connect and makes them smart switches
   #
-  def __init__ (self, transparent):
+  def __init__ (self, transparent, ignore = None):
     core.openflow.addListeners(self)
     self.transparent = transparent
 
   def _handle_ConnectionUp (self, event):
-    log.debug("Connection %s" % (event.connection,))
-    LearningSwitch(event.connection, self.transparent)
+    if event is None:
+      msglog("NOTE", "Connection event is empty")
+      return
+    else:
+      msglog("OK", "Connection {0}".format(event.connection))
+      LearningSwitch(event.connection, self.transparent)
 
 
-def launch (transparent=False, hold_down=gFloodDelay):
+def launch(transparent = False, hold_down = gFloodDelay, ignore = None):
   #
   # Now let's get started
   #
@@ -395,6 +407,10 @@ def launch (transparent=False, hold_down=gFloodDelay):
     gFloodDelay = int(str(hold_down))
     assert gFloodDelay >= 0
   except:
-    raise RuntimeError("Expected hold-down to be a number")
+    raise RuntimeError("Hold-down should be a real number")
 
-  core.registerNew(l2_learning, str_to_bool(transparent))
+  if ignore:
+    ignore = ignore.replace(',', ' ').split()
+    ignore = set(str_to_dpid(dpid) for dpid in ignore)
+
+  core.registerNew(l2_learning, str_to_bool(transparent), ignore)
