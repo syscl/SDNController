@@ -1,0 +1,11 @@
+#!/bin/sh
+#
+# (c) 2018 Yating Zhou (aka syscl)
+#
+# match against ethernet interface
+gEthIF=$(ifconfig | grep -o 'h[[:digit:]]*-eth[[:digit:]]')
+echo "My ethernet interface is: ${gEthIF}"
+ip addr flush dev ${gEthIF}
+dhclient ${gEthIF}
+
+exit 0
