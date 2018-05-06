@@ -213,13 +213,13 @@ class LearningSwitch (object):
       """
       print out the current ARP packet information
       """
-      if packet.type == packet.ARP_TYPE:
+      if aPacket.type == aPacket.ARP_TYPE:
         msglog("OK", "Source IP            : {0}".format(aPacket.payload.protosrc))
         msglog("OK", "Source MAC           : {0}".format(aPacket.payload.hwsrc))
         msglog("OK", "Source Destination IP: {0}".format(aPacket.payload.protodst))
         msglog("OK", "Destination MAC      : {0}".format(aPacket.dst))
       else:
-        msglog("FAIL", "Not an ARP packet, type = {0}".format(packet.type))
+        msglog("FAIL", "Not an ARP packet, type = {0}".format(aPacket.type))
 
     def arpPktShim(aPacket):
       """
@@ -234,6 +234,8 @@ class LearningSwitch (object):
         if isARPPktInvalid(aPacket):
           # mitigate it here
           blockMAC(aPacket)
+          # indicate packet has been washed out
+          return True
       elif aPacket.payload.opcode == pkt.arp.REPLY:
         # syscl - we should handle reply packet as well
         #TODO: Do we need to use possion for checking flooding message?
@@ -247,6 +249,8 @@ class LearningSwitch (object):
             # Yating - simply drop a packet will cause performance hit, thus
             # two ideas come into my mind: poisson checking vs blacklist
             blockMAC(aPacket)
+            # indicate packet has been washed out
+            return True
 
     def isARPPktInvalid(aPacket):
       """
@@ -264,9 +268,6 @@ class LearningSwitch (object):
       # because we also want to specific what type of ARP spoof it is 
       if src_mac_eth == src_mac_arp:
         if src_ip_arp not in hosts.keys():
-          #for key in hosts.keys():
-          #  print("Key: %s, Value: %s" %(key, hosts[key]))
-          #print("table: ", hosts.keys())
           msglog("NOTE", "{0} is not in table.".format(src_mac_arp))
           ret = True
         else:
@@ -293,13 +294,13 @@ class LearningSwitch (object):
       timeout = 60 # unit: sec
       msglog("--->", "Generating blacklist to drop all packets from {0} for {1}s".format(mac, timeout))
       actions = []
-      actions.append(of.ofp_action_output(port = of.OFPP_NONE)) # block packet
+      actions.append(of.ofp_action_output(port = of.OFPP_NONE)) # Drop
       msg = of.ofp_flow_mod(command=of.OFPFC_ADD,
-                                idle_timeout=timeout, 
-                                hard_timeout=timeout, 
-                                buffer_id=event.ofp.buffer_id,
-                                actions=actions,
-                                match=of.ofp_match.from_packet(aPacket,
+                              idle_timeout=timeout, # Drop packets for 60 seconds
+                              hard_timeout=timeout, # Drop packets for 60 seconds
+                              buffer_id=event.ofp.buffer_id,
+                              actions=actions,
+                              match=of.ofp_match.from_packet(aPacket,
                                                                event.port))
       event.connection.send(msg.pack())
       msglog("OK", "Generate blacklist for {0}".format(mac))
@@ -319,21 +320,19 @@ class LearningSwitch (object):
     elif packet.type == packet.INVALID_TYPE:
       msglog("NOTE", "Found invalid packet({0})".format(packet.INVALID_TYPE))
       drop()
+      return
 
     # If ARP packet, then check if the packet is spoofed. 
     # If its not, then continue with the flow.
     # Yating - as for ARP packet, please refer to pox/lib/packet/arp.py
     #
     if packet.type == packet.ARP_TYPE:
-      arpPktShim(packet)
-    #   elif packet.payload.opcode == pkt.arp.REPLY:
-    #     # Check consistency of IP address
-    #     msglog("OK", "ARP packet opereation: REPLY")
-    #     msglog("--->", "Checking consistency of IP address")
-    #     #gTargetHardwareAddress=pkt.arp.hwdst
-    #     #gDestinationAddress=
-
-
+      if arpPktShim(packet):
+        # if the arp packet has been washed out, simply return 
+        return
+      else:
+        # ensure semantic consistency
+        pass
 
     self.macToPort[packet.src] = event.port # 1
 
