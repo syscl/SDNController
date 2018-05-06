@@ -1,5 +1,9 @@
 SDNController Changelog
 ==============
+### v1.3
+
+- Cosemic fix
+
 ### v1.2
 
 - Fixed up arpPktShim() so that it can protect against ARP spoof as desire

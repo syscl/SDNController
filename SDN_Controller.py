@@ -294,10 +294,10 @@ class LearningSwitch (object):
       timeout = 60 # unit: sec
       msglog("--->", "Generating blacklist to drop all packets from {0} for {1}s".format(mac, timeout))
       actions = []
-      actions.append(of.ofp_action_output(port = of.OFPP_NONE)) # Drop
+      actions.append(of.ofp_action_output(port = of.OFPP_NONE)) # block packet
       msg = of.ofp_flow_mod(command=of.OFPFC_ADD,
-                              idle_timeout=timeout, # Drop packets for 60 seconds
-                              hard_timeout=timeout, # Drop packets for 60 seconds
+                              idle_timeout=timeout, 
+                              hard_timeout=timeout, 
                               buffer_id=event.ofp.buffer_id,
                               actions=actions,
                               match=of.ofp_match.from_packet(aPacket,
